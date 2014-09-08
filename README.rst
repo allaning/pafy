@@ -220,6 +220,12 @@ or use a `virtualenv <http://virtualenv.org>`_ if you don't want to install it s
     $ source venv/bin/activate
     $ pip install pafy
 
+To install Pafy from a Linux shell:
+
+.. code-block:: bash
+
+    $ [sudo] python setup.py install 
+
 
 Alternatively you can just grab the pafy.py file and import it in your python
 code:
