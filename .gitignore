@@ -9,6 +9,7 @@ dev/
 .test
 *.pyc
 .pypi
+vi.py
 __pycache__
 *.swp
 *.mp4

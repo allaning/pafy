@@ -1,3 +1,60 @@
+3 February 2015
+Version 0.3.72
+
+[Bugfix] - Fix issue with country restricted items (#74)
+
+-------------------------------------------------------------------------------
+
+1 February 2015
+Version 0.3.70
+
+[Bugfix] - Fix "Sign in to confirm your age" message on some videos
+
+-------------------------------------------------------------------------------
+
+13 January 2015
+Version 0.3.68
+
+[Update] - changed to LGPL license (was GPL) (#68)
+[Update] - Added getbestvideo function (#70)
+
+-------------------------------------------------------------------------------
+
+23 November 2014
+Version 0.3.66
+
+[Update] - Added new itags for 60fps and VP9 streams (298, 299, 302, 303)
+[Bugfix] - Fixed failure on certain video items (#59)
+[Update] - Added start/end data for playlist items (Dav1dde) (#62, #63)
+
+-------------------------------------------------------------------------------
+
+19 October 2014
+Version 0.3.64
+
+[Update] - Cache javascript file locally to temp dir (less fetching)
+[Update] - Added itag 278 (low-res VP9)
+[Feature] - Retrieve DASH streams (more streams, higher quality audio)
+[Feature] - added remux_audio parameter to download function to remux audio
+            files if ffmpeg or avconv is installed (better compatibility)
+
+-------------------------------------------------------------------------------
+
+27 August 2014
+Version 0.3.62
+
+[Feature] - Added url_https property to return https url
+
+-------------------------------------------------------------------------------
+
+15 August 2014
+Version 0.3.60
+
+[Bugfix] - Add Opus audio itags 249/250/251
+[Bugfix] - Warn instead of fail on unrecognised itags
+
+-------------------------------------------------------------------------------
+
 24 July 2014
 Version 0.3.58
 
@@ -140,7 +197,7 @@ Version 0.3.34
 
 7 February 2014
 Version 0.3.33
-Authors: leokewitz, nagev
+Authors: leokewitz, np1
 
 [Feature] - Store html5player js data in memory to reduce repeat fetches
 [Feature] - Removed redundant looping in js function extraction
@@ -150,7 +207,7 @@ Authors: leokewitz, nagev
 
 4 February 2014
 Version 0.3.31
-Authors: nagev
+Authors: np1
 
 [Bugfix] - Handle error getting stream map
 [Bugfix] - Handle dollar character in js function name
@@ -159,7 +216,7 @@ Authors: nagev
 
 3 February 2014
 Version 0.3.30
-Authors: nagev
+Authors: np1
 
 [Bugfix] - Fix regex for decrypting signatures
 [Feature] - Added callback function for status reporting
@@ -168,7 +225,7 @@ Authors: nagev
 
 14 January 2014
 Version 0.3.26
-Authors: nagev
+Authors: np1
 
 [Feature] - Change dimensions property from (str, str) to (int, int)
 [Bugfix] - Replace bad characters in filenames
@@ -177,7 +234,7 @@ Authors: nagev
 
 15 December 2013
 Version 0.3.25
-Authors: nagev
+Authors: np1
 
 [Feature] Get video category metadata.
 
@@ -185,7 +242,7 @@ Authors: nagev
 
 12 December 2013
 Version 0.3.24
-Authors: hugovk, nagev
+Authors: hugovk, np1
 
 [Feature] Download function to return the name of file saved
 [Feature] Get video description
@@ -195,7 +252,7 @@ Authors: hugovk, nagev
 
 14 November 2013
 Version 0.3.23
-Authors: davidfischer-ch, nagev
+Authors: davidfischer-ch, np1
 
 [Bugfix] Fixed issue when no keywords specified for YouTube video
 [Bugfix] added UTF8 encoding declaration
@@ -206,7 +263,7 @@ Authors: davidfischer-ch, nagev
 
 27 October 2013
 Version 0.3.22
-Authors: nagev
+Authors: np1
 
 [Feature] Added Pafy.oggstreams and Pafy.m4astreams codec specific stream lists
 [Feature] Added Pafy.dimensions attribute to return resolution as a 2-tuple
@@ -222,7 +279,7 @@ Authors: nagev
 
 19 October 2013
 Version 0.3.20
-Authors: nagev
+Authors: np1
 
 [Feature] Added support for audio-only stream download (m4a and ogg vorbis)
 [Feature] Added support for video-only stream download (m4v)

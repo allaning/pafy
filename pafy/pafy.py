@@ -3,33 +3,32 @@
 """
 pafy.py.
 
-Python library to retrieve YouTube content and metadata
+Python library to download YouTube content and retrieve metadata
 
 https://github.com/np1/pafy
 
-Copyright (C)  2013-2014 nagev
+Copyright (C)  2013-2014 np1
 
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Lesser General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version.
 
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE.  See the GNU Lesser General Public License for more details.
 
-You should have received a copy of the GNU General Public License
-along with this program.  If not, see <http://www.gnu.org/licenses/>.
+You should have received a copy of the GNU Lesser General Public License along
+with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 """
 
 
 from __future__ import unicode_literals
 
-__version__ = "0.3.58"
-__author__ = "nagev"
-__license__ = "GPLv3"
+__version__ = "0.3.72"
+__author__ = "np1"
+__license__ = "LGPLv3"
 
 
 import re
@@ -38,6 +37,8 @@ import sys
 import time
 import json
 import logging
+import hashlib
+import tempfile
 from xml.etree import ElementTree
 
 
@@ -84,17 +85,21 @@ def parseqs(data):
     return data
 
 
-def fetch_decode(url):
+def fetch_decode(url, encoding=None):
     """ Fetch url and decode. """
     req = g.opener.open(url)
     ct = req.headers['content-type']
 
-    if "charset=" in ct:
+    if encoding:
+        return req.read().decode(encoding)
+
+    elif "charset=" in ct:
+        dbg("charset: %s", ct)
         encoding = re.search(r"charset=([\w-]+)\s*(:?;|$)", ct).group(1)
-        dbg("encoding: %s", ct)
         return req.read().decode(encoding)
 
     else:
+        dbg("encoding unknown")
         return req.read()
 
 
@@ -102,32 +107,33 @@ def new(url, basic=True, gdata=False, signature=True, size=False,
         callback=lambda x: None):
     """ Return a new pafy instance given a url or video id.
 
+    NOTE: The signature argument has been deprecated and now has no effect,
+        it will be removed in a future version.
+
     Optional arguments:
         basic - fetch basic metadata and streams
         gdata - fetch gdata info (upload date, description, category)
-        signature - fetch data required to decrypt urls, if encrypted
         size - fetch the size of each stream (slow)(decrypts urls if needed)
         callback - a callback function to receive status strings
 
-    If any of the first four above arguments are False, those data items will
+    If any of the first three above arguments are False, those data items will
     be fetched only when first called for.
 
     The defaults are recommended for most cases. If you wish to create
-    many video objects at once, you may want to set all to False, eg:
+    many video objects at once, you may want to set basic to False, eg:
 
-        video = pafy.new(basic=False, signature=False)
+        video = pafy.new(basic=False)
 
     This will be quick because no http requests will be made on initialisation.
 
-    Setting signature or size to True will override the basic argument
-    and force basic data to be fetched too (basic data is required to
-    obtain Stream objects and determine whether signatures are encrypted.
-
-    Similarly, setting size to true will force the signature data to be
-    fetched if the videos have encrypted signatures, so will override the
-    value set in the signature argument.
+    Setting size to True will override the basic argument and force basic data
+    to be fetched too (basic data is required to obtain Stream objects).
 
     """
+    if not signature:
+        logging.warning("signature argument has no effect and will be removed"
+                        " in a future version.")
+
     return Pafy(url, basic, gdata, signature, size, callback)
 
 
@@ -137,9 +143,18 @@ def get_video_info(video_id, newurl=None):
     url = newurl if newurl else url
     info = fetch_decode(url)  # bytes
     info = parseqs(info)  # unicode dict
-    dbg("Fetched video info")
+    dbg("Fetched video info%s", " (age ver)" if newurl else "")
 
-    if info['status'][0] == "fail":
+    if info['status'][0] == "fail" and info['errorcode'][0] == '150' and \
+            "confirm your age" in info['reason'][0]:
+        # Video requires age verification
+        dbg("Age verification video")
+        new.callback("Age verification video")
+        newurl = g.urls['age_vidinfo'] % (video_id, video_id)
+        info = get_video_info(video_id, newurl)
+        info.update({"age_ver": True})
+
+    elif info['status'][0] == "fail":
         reason = info['reason'][0] or "Bad video argument"
         raise IOError("Youtube says: %s [%s]" % (reason, video_id))
 
@@ -182,18 +197,16 @@ class g(object):
                     'video_id=%s&asv=3&el=detailpage&hl=en_US'),
         'playlist': ('http://www.youtube.com/list_ajax?'
                      'style=json&action_get_list=1&list=%s'),
-        'age_vidinfo': ('https://www.youtube.com/get_video_info?video_id=%s&'
-                        'el=player_embedded&gl=US&hl=en&eurl=https://youtube.'
-                        'googleapis.com/v/%s&asv=3&sts=1588')
+        'age_vidinfo': ('http://www.youtube.com/get_video_info?video_id=%s&'
+                        'eurl=https://youtube.googleapis.com/v/%s&sts=1588')
     }
-    ua = ("Mozilla/5.0 (compatible; MSIE 9.0; Windows NT 6.1; WOW64;"
-          " Trident/5.0)")
+    user_agent = "pafy " + __version__
     UEFSM = 'url_encoded_fmt_stream_map'
     AF = 'adaptive_fmts'
     jsplayer = r';\s*ytplayer\.config\s*=\s*(\s*{.*?}\s*)\s*;'
     lifespan = 60 * 60 * 5  # 5 hours
     opener = build_opener()
-    opener.addheaders = [('User-Agent', ua)]
+    opener.addheaders = [('User-Agent', user_agent)]
     itags = {
         '5': ('320x240', 'flv', "normal", ''),
         '17': ('176x144', '3gp', "normal", ''),
@@ -208,10 +221,6 @@ class g(object):
         '44': ('854x480', 'webm', "normal", ''),
         '45': ('1280x720', 'webm', "normal", ''),
         '46': ('1920x1080', 'webm', "normal", ''),
-
-        # '59': ('1x1', 'mp4', 'normal', ''),
-        # '78': ('1x1', 'mp4', 'normal', ''),
-
         '82': ('640x360-3D', 'mp4', "normal", ''),
         '83': ('640x480-3D', 'mp4', 'normal', ''),
         '84': ('1280x720-3D', 'mp4', "normal", ''),
@@ -237,19 +246,25 @@ class g(object):
         '219': ('854x480', 'webm', 'video', 'VP8'),
         '242': ('360x240', 'webm', 'video', 'VP9'),
         '243': ('480x360', 'webm', 'video', 'VP9'),
-        '244': ('640x480', 'webm', 'video', 'VP9'),
-        '245': ('640x480', 'webm', 'video', 'VP9'),
-        '246': ('640x480', 'webm', 'video', 'VP9'),
+        '244': ('640x480', 'webm', 'video', 'VP9 low'),
+        '245': ('640x480', 'webm', 'video', 'VP9 med'),
+        '246': ('640x480', 'webm', 'video', 'VP9 high'),
         '247': ('720x480', 'webm', 'video', 'VP9'),
         '248': ('1920x1080', 'webm', 'video', 'VP9'),
+        '249': ('48k', 'ogg', 'audio', 'Opus'),
+        '250': ('56k', 'ogg', 'audio', 'Opus'),
+        '251': ('128k', 'ogg', 'audio', 'Opus'),
         '256': ('192k', 'm4a', 'audio', '6-channel'),
         '258': ('320k', 'm4a', 'audio', '6-channel'),
         '264': ('2560x1440', 'm4v', 'video', ''),
+        '266': ('3840x2160', 'm4v', 'video', 'AVC'),
         '271': ('1920x1280', 'webm', 'video', 'VP9'),
         '272': ('3414x1080', 'webm', 'video', 'VP9'),
-
-        '298': ('1280x720', 'm4v', 'video', ''),
-        '299': ('1920x1080', 'm4v', 'video', '')
+        '278': ('256x144', 'webm', 'video', 'VP9'),
+        '298': ('1280x720', 'm4v', 'video', '60fps'),
+        '299': ('1920x1080', 'm4v', 'video', '60fps'),
+        '302': ('1280x720', 'webm', 'video', 'VP9'),
+        '303': ('1920x1080', 'webm', 'video', 'VP9'),
     }
 
 
@@ -263,6 +278,38 @@ def _extract_smap(map_name, dic, zero_idx=True):
         return [dict((k, v[0]) for k, v in x.items()) for x in smap]
 
     return []
+
+
+def _extract_dash(dashurl):
+    """ Download dash url and extract some data. """
+    # pylint: disable = R0914
+    dbg("Fetching dash page")
+    dashdata = fetch_decode(dashurl)
+    dbg("DASH list fetched")
+    ns = "{urn:mpeg:DASH:schema:MPD:2011}"
+    ytns = "{http://youtube.com/yt/2012/10/10}"
+    tree = ElementTree.fromstring(dashdata)
+    tlist = tree.findall(".//%sRepresentation" % ns)
+    dashmap = []
+
+    for x in tlist:
+        baseurl = x.find("%sBaseURL" % ns)
+        url = baseurl.text
+        size = baseurl.attrib["%scontentLength" % ytns]
+        bitrate = x.get("bandwidth")
+        itag = uni(x.get("id"))
+        width = uni(x.get("width"))
+        height = uni(x.get("height"))
+        type_ = re.search(r"(?:\?|&)mime=([\w\d\/]+)", url).group(1)
+        dashmap.append(dict(bitrate=bitrate,
+                            dash=True,
+                            itag=itag,
+                            width=width,
+                            height=height,
+                            url=url,
+                            size=size,
+                            type=type_))
+    return dashmap
 
 
 def _extract_function_from_js(name, js):
@@ -336,7 +383,7 @@ def _get_other_funcs(primary_func, js):
             name = "%s.%s" % (match.group(1), match.group(2))
 
             # don't treat X=A.slice(B) as X=O.F(B)
-            if match.group(2) == "slice":
+            if match.group(2) in ["slice", "splice"]:
                 continue
 
             if name not in functions:
@@ -382,7 +429,7 @@ def _get_func_from_call(caller, name, arguments, js_url):
     return newfunction
 
 
-def _solve(f, js_url):
+def _solve(f, js_url, returns=True):
     """Solve basic javascript function. Return solution value (str). """
     # pylint: disable=R0914,R0912
     resv = "slice|splice|reverse"
@@ -395,7 +442,7 @@ def _solve(f, js_url):
         'return': r'return (\w+)(\.join\(""\))?$',
         'reverse': r'(\w+)=(\w+)\.reverse\(\)$',
         'reverse_noass': r'(\w+)\.reverse\(\)$',
-        'return_reverse': r'return (\w+)\.reverse()$',
+        'return_reverse': r'return (\w+)\.reverse\(\)$',
         'slice': r'(\w+)=(\w+)\.slice\((\w+)\)$',
         'splice_noass': r'([$\w]+)\.splice\(([$\w]+)\,([$\w]+)\)$',
         'return_slice': r'return (\w+)\.slice\((\w+)\)$',
@@ -433,9 +480,7 @@ def _solve(f, js_url):
             dic, key, args = m.group(1, 2, 3)
             funcname = "%s.%s" % (dic, key)
             newfunc = _get_func_from_call(f, funcname, args.split(","), js_url)
-            _solve.expect_noret = True
-            changed_args = _solve(newfunc, js_url)
-            _solve.expect_noret = False
+            changed_args = _solve(newfunc, js_url, returns=False)
 
             for arg in f['args']:
 
@@ -487,12 +532,12 @@ def _solve(f, js_url):
             a, b, c = [_getval(x, f['args']) for x in m.group(1, 2, 3)]
             f['args'][m.group(1)] = b[c:]
 
-    if _solve.expect_noret:
+    if not returns:
+        # Return the args dict if no return statement in function
         return f['args']
 
     else:
         raise IOError("Processed js funtion parts without finding return")
-
 
 
 def _decodesig(sig, js_url):
@@ -513,6 +558,94 @@ def _decodesig(sig, js_url):
     return solved
 
 
+def remux(infile, outfile, quiet=False, muxer="ffmpeg"):
+    """ Remux audio. """
+    from subprocess import call, STDOUT
+    muxer = muxer if isinstance(muxer, str) else "ffmpeg"
+
+    for tool in set([muxer, "ffmpeg", "avconv"]):
+        cmd = [tool, "-y", "-i", infile, "-acodec", "copy", "-vn", outfile]
+
+        try:
+            with open(os.devnull, "w") as devnull:
+                call(cmd, stdout=devnull, stderr=STDOUT)
+
+        except OSError:
+            dbg("Failed to remux audio using %s", tool)
+
+        else:
+            os.unlink(infile)
+            dbg("remuxed audio file using %s" % tool)
+
+            if not quiet:
+                sys.stdout.write("\nAudio remuxed.\n")
+
+            break
+
+    else:
+        logging.warning("audio remux failed")
+        os.rename(infile, outfile)
+
+
+def fetch_cached(url, encoding=None, dbg_ref="", file_prefix=""):
+    """ Fetch url - from tmpdir if already retrieved. """
+    tmpdir = os.path.join(tempfile.gettempdir(), "pafy")
+
+    if not os.path.exists(tmpdir):
+        os.makedirs(tmpdir)
+
+    url_md5 = hashlib.md5(url.encode("utf8")).hexdigest()
+    cached_filename = os.path.join(tmpdir, file_prefix + url_md5)
+
+    if os.path.exists(cached_filename):
+        dbg("fetched %s from cache", dbg_ref)
+
+        with open(cached_filename) as f:
+            retval = f.read()
+
+        return retval
+
+    else:
+        data = fetch_decode(url, "utf8")  # unicode
+        dbg("Fetched %s", dbg_ref)
+        new.callback("Fetched %s" % dbg_ref)
+
+        with open(cached_filename, "w") as f:
+            f.write(data)
+
+        # prune files after write
+        prune_files(tmpdir, file_prefix)
+        return data
+
+
+def prune_files(path, prefix="", age_max=3600 * 24 * 14, count_max=4):
+    """ Remove oldest files from path that start with prefix.
+
+    remove files older than age_max, leave maximum of count_max files.
+    """
+    tempfiles = []
+
+    if not os.path.isdir(path):
+        return
+
+    for f in os.listdir(path):
+        filepath = os.path.join(path, f)
+
+        if os.path.isfile(filepath) and f.startswith(prefix):
+            age = time.time() - os.path.getmtime(filepath)
+
+            if age > age_max:
+                os.unlink(filepath)
+
+            else:
+                tempfiles.append((filepath, age))
+
+    tempfiles = sorted(tempfiles, key=lambda x: x[1], reverse=True)
+
+    for f in tempfiles[:-count_max]:
+        os.unlink(f[0])
+
+
 def get_js_sm(video_id):
     """ Fetch watchinfo page and extract stream map and js funcs if not known.
 
@@ -524,39 +657,34 @@ def get_js_sm(video_id):
 
     """
     watch_url = g.urls['watchv'] % video_id
-    new.callback("Fetching watchv page")
+    new.callback("Fetching watch page")
     watchinfo = fetch_decode(watch_url)  # unicode
-
-    if re.search(r'player-age-gate-content">', watchinfo) is not None:
-        # create a new Pafy object
-        dbg("creating new instance for age restrictved video")
-        doppleganger = new(video_id, False, False, False)
-        video_info_url = g.urls['age_vidinfo'] % (video_id, video_id)
-        doppleganger.fetch_basic(ageurl=video_info_url)
-        return "age", "age", doppleganger
-
-    dbg("Fetched watchv page")
-    new.callback("Fetched watchv page")
+    dbg("Fetched watch page")
+    new.callback("Fetched watch page")
     m = re.search(g.jsplayer, watchinfo)
     myjson = json.loads(m.group(1))
     stream_info = myjson['args']
-    smap = _extract_smap(g.UEFSM, stream_info, False)
-    smap += _extract_smap(g.AF, stream_info, False)
+    dash_url = stream_info['dashmpd']
+    sm = _extract_smap(g.UEFSM, stream_info, False)
+    asm = _extract_smap(g.AF, stream_info, False)
     js_url = myjson['assets']['js']
     js_url = "https:" + js_url if js_url.startswith("//") else js_url
     funcs = Pafy.funcmap.get(js_url)
 
     if not funcs:
+        dbg("Fetching javascript")
         new.callback("Fetching javascript")
-        javascript = fetch_decode(js_url)  # bytes
-        javascript = javascript.decode("utf8")  # unicode
-        dbg("Fetched javascript")
-        new.callback("Fetched javascript")
+        javascript = fetch_cached(js_url, encoding="utf8",
+                                  dbg_ref="javascript", file_prefix="js-")
         mainfunc = _get_mainfunc_from_js(javascript)
         funcs = _get_other_funcs(mainfunc, javascript)
         funcs['mainfunction'] = mainfunc
 
-    return smap, js_url, funcs
+    elif funcs:
+        dbg("Using functions in memory extracted from %s", js_url)
+        dbg("Mem contains %s js func sets", len(Pafy.funcmap))
+
+    return (sm, asm), js_url, funcs, dash_url
 
 
 def _make_url(raw, sig, quick=True):
@@ -566,33 +694,12 @@ def _make_url(raw, sig, quick=True):
 
     if "signature=" not in raw:
 
-        if not sig:
+        if sig is None:
             raise IOError("Error retrieving url")
 
         raw += "&signature=" + sig
 
     return raw
-
-
-def gen_ageurl(dop, itag):
-    """ Decrypt signature for age-restricted item. Return url. """
-    for x in dop.sm + dop.asm:
-
-        if x['itag'] == itag and len(x['s']) == 86:
-            s = x['s']
-            s = s[2:63] + s[82] + s[64:82] + s[63]
-            dbg("decrypted agesig: %s%s", s[:22], "..")
-            return _make_url(x['url'], s)
-
-
-def _get_matching_stream(smap, itag):
-    """ Return the url and signature for a stream matching itag in smap. """
-    for x in smap:
-
-        if x['itag'] == itag:
-            return x['url'], x.get('s')
-
-    raise IOError("Error fetching stream")
 
 
 class Stream(object):
@@ -601,32 +708,58 @@ class Stream(object):
 
     def __init__(self, sm, parent):
         """ Set initial values. """
-        def safeint(x):
-            """ Return type int if x is a digit. """
-            return int(x) if x.isdigit() else x
-
         self._itag = sm['itag']
+        # is_dash = "width" in sm and "height" in sm
+        is_dash = "dash" in sm
+
+        if self._itag not in g.itags:
+            logging.warning("Unknown itag: %s", self._itag)
+            return None
+
+        self._mediatype = g.itags[self.itag][2]
         self._threed = 'stereo3d' in sm and sm['stereo3d'] == '1'
-        self._resolution = g.itags[self.itag][0]
-        self._dimensions = tuple(self.resolution.split("-")[0].split("x"))
-        self._dimensions = tuple(map(safeint, self.dimensions))
+
+        if is_dash:
+
+            if sm['width'] != "None":  # dash video
+                self._resolution = "%sx%s" % (sm['width'], sm['height'])
+                self._quality = self._resolution
+                self._dimensions = (int(sm['width']), int(sm['height']))
+
+            else:  # dash audio
+                self._resolution = "0x0"
+                self._dimensions = (0, 0)
+                self._rawbitrate = int(sm['bitrate'])
+                # self._bitrate = uni(int(sm['bitrate']) // 1024) + "k"
+                self._bitrate = g.itags[self.itag][0]
+                self._quality = self._bitrate
+
+            self._fsize = int(sm['size'])
+            # self._bitrate = sm['bitrate']
+            # self._rawbitrate = uni(int(self._bitrate) // 1024) + "k"
+
+        else:  # not dash
+            self._resolution = g.itags[self.itag][0]
+            self._fsize = None
+            self._bitrate = self._rawbitrate = None
+            self._dimensions = tuple(self.resolution.split("-")[0].split("x"))
+            self._dimensions = tuple([int(x) if x.isdigit() else x for x in
+                                      self._dimensions])
+            self._quality = self.resolution
+
         self._vidformat = sm['type'].split(';')[0]  # undocumented
-        self._quality = self.resolution
         self._extension = g.itags[self.itag][1]
         self._title = parent.title
         self.encrypted = 's' in sm
         self._parent = parent
         self._filename = self.generate_filename()
-        self._fsize = None
-        self._bitrate = self._rawbitrate = None
-        self._mediatype = g.itags[self.itag][2]
         self._notes = g.itags[self.itag][3]
         self._url = None
         self._rawurl = sm['url']
         self._sig = sm['s'] if self.encrypted else sm.get("sig")
         self._active = False
 
-        if self.mediatype == "audio":
+        if self.mediatype == "audio" and not is_dash:
             self._dimensions = (0, 0)
             self._bitrate = self.resolution
             self._quality = self.bitrate
@@ -720,50 +853,25 @@ class Stream(object):
     @property
     def url(self):
         """ Return the url, decrypt if required. """
-        if self._url:
-            pass
+        if not self._url:
 
-        elif self._parent.age:
-            self._url = gen_ageurl(self._parent.doppleganger, self.itag)
+            if self._parent.age_ver:
 
-        elif not self.encrypted:
+                if self._sig:
+                    s = self._sig
+                    self._sig = s[2:63] + s[82] + s[64:82] + s[63]
+
+            elif self.encrypted:
+                self._sig = _decodesig(self._sig, self._parent.js_url)
+
             self._url = _make_url(self._rawurl, self._sig)
 
-        else:
-            # encrypted url signatures
-            if self._parent.js_url:
-                # dbg("using cached js %s" % self._parent.js_url[-15:])
-                enc_streams = self._parent.enc_streams
-
-            else:
-                enc_streams, js_url, funcs = get_js_sm(self._parent.videoid)
-                self._parent.expiry = time.time() + g.lifespan
-                self._parent.js_url = js_url
-
-                # check for age
-                if type(enc_streams) == uni and enc_streams == "age":
-                    self._parent.age = True
-                    dop = self._parent.doppleganger = funcs
-                    self._url = gen_ageurl(dop, self.itag)
-                    return self._url
-
-                # Create Pafy funcmap dict for this js_url
-                if not Pafy.funcmap.get(js_url):
-                    Pafy.funcmap[js_url] = funcs
-
-                # else:
-                    # Add javascript functions to Pafy funcmap dict
-                    # in case same js_url has different functions
-                    # Pafy.funcmap[js_url].update(funcs)
-
-                # Stash usable urls and encrypted sigs in parent Pafy object
-                self._parent.enc_streams = enc_streams
-
-            url, s = _get_matching_stream(enc_streams, self.itag)
-            sig = _decodesig(s, self._parent.js_url) if s else None
-            self._url = _make_url(url, sig)
-
         return self._url
+
+    @property
+    def url_https(self):
+        """ Return https url. """
+        return self.url.replace("http://", "https://")
 
     def __repr__(self):
         """ Return string representation. """
@@ -792,10 +900,11 @@ class Stream(object):
             return True
 
     def download(self, filepath="", quiet=False, callback=lambda *x: None,
-                 meta=False):
+                 meta=False, remux_audio=False):
         """ Download.  Use quiet=True to supress output. Return filename.
 
         Use meta=True to append video id and itag to generated filename
+        Use remax_audio=True to remux audio file downloads
 
         """
         # pylint: disable=R0912,R0914
@@ -838,7 +947,7 @@ class Stream(object):
         if offset:
             # partial file exists, resume download
             resuming_opener = build_opener()
-            resuming_opener.addheaders = [('User-Agent', g.ua),
+            resuming_opener.addheaders = [('User-Agent', g.user_agent),
                                           ("Range", "bytes=%s-" % offset)]
             response = resuming_opener.open(self.url)
             bytesdone = offset
@@ -867,10 +976,16 @@ class Stream(object):
                 callback(total, *progress_stats)
 
         if self._active:
-            os.rename(temp_filepath, filepath)
+
+            if remux_audio and self.mediatype == "audio":
+                remux(temp_filepath, filepath, quiet=quiet, muxer=remux_audio)
+
+            else:
+                os.rename(temp_filepath, filepath)
+
             return filepath
 
-        else:
+        else:  # download incomplete, return temp filepath
             outfh.close()
             return temp_filepath
 
@@ -893,14 +1008,18 @@ class Pafy(object):
         self._have_gdata = False
 
         self._description = None
+        self._likes = None
+        self._dislikes = None
         self._category = None
         self._published = None
         self._username = None
 
         self.sm = []
         self.asm = []
+        self.dash = []
         self.js_url = None  # if js_url is set then has new stream map
-        self.age = False
+        self._dashurl = None
+        self.age_ver = False
         self._streams = []
         self._oggstreams = []
         self._m4astreams = []
@@ -930,29 +1049,54 @@ class Pafy(object):
         if gdata:
             self._fetch_gdata()
 
-        if signature:
-            # pylint: disable=W0104
-            s = self.streams
-
-            if self.ciphertag:
-                s[0].url  # forces signature decryption
-
         if size:
-
             for s in self.allstreams:
                 # pylint: disable=W0104
                 s.get_filesize()
 
-    def fetch_basic(self, ageurl=None):
-        """ Fetch info url page and set member vars. """
+    def fetch_basic(self):
+        """ Fetch basic data and streams. """
         if self._have_basic:
             return
 
-        if ageurl:
-            allinfo = get_video_info("none", ageurl)
+        self._fetch_basic()
+        sm_ciphertag = "s" in self.sm[0]
 
-        else:
-            allinfo = get_video_info(self.videoid)
+        if self.ciphertag != sm_ciphertag:
+            dbg("ciphertag mismatch")
+            self.ciphertag = not self.ciphertag
+
+        if self.ciphertag:
+            dbg("Encrypted signature detected.")
+
+            if not self.age_ver:
+                smaps, js_url, funcs, dashurl = get_js_sm(self.videoid)
+                Pafy.funcmap[js_url] = funcs
+                self.sm, self.asm = smaps
+                self.js_url = js_url
+                dashsig = re.search(r"/s/([\w\.]+)", dashurl).group(1)
+                dbg("decrypting dash sig")
+                goodsig = _decodesig(dashsig, js_url)
+                self._dashurl = re.sub(r"/s/[\w\.]+",
+                                       "/signature/%s" % goodsig, dashurl)
+
+            else:
+                s = re.search(r"/s/([\w\.]+)", self._dashurl).group(1)
+                s = s[2:63] + s[82] + s[64:82] + s[63]
+                self._dashurl = re.sub(r"/s/[\w\.]+",
+                                       "/signature/%s" % s, self._dashurl)
+
+        self.dash = _extract_dash(self._dashurl)
+        self._have_basic = 1
+        self._process_streams()
+        self.expiry = time.time() + g.lifespan
+
+    def _fetch_basic(self, info_url=None):
+        """ Fetch info url page and set member vars. """
+        allinfo = get_video_info(self.videoid, newurl=info_url)
+
+        if allinfo.get("age_ver"):
+            self.age_ver = True
 
         new.callback("Fetched video info")
 
@@ -962,6 +1106,7 @@ class Pafy(object):
             return retval[0] if retval != default else default
 
         self._title = _get_lst('title')
+        self._dashurl = _get_lst('dashmpd')
         self._author = _get_lst('author')
         self._videoid = _get_lst('video_id')
         self._rating = float(_get_lst('avg_rating', 0.0))
@@ -973,21 +1118,9 @@ class Pafy(object):
         self._bigthumb = _get_lst('iurlsd', "")
         self._bigthumbhd = _get_lst('iurlsdmaxres', "")
         self.ciphertag = _get_lst("use_cipher_signature") == "True"
-
-        if ageurl:
-            self.ciphertag = False
-            dbg("Encrypted signature detected - age restricted")
-
-        if self.ciphertag:
-            dbg("Encrypted signature detected.")
-
-        # extract stream maps
-        self.sm = _extract_smap(g.UEFSM, allinfo, not self.js_url)
-        self.asm = _extract_smap(g.AF, allinfo, not self.js_url)
-
-        self._have_basic = 1
-        self._process_streams()
-        self.expiry = time.time() + g.lifespan
+        self.sm = _extract_smap(g.UEFSM, allinfo, True)
+        self.asm = _extract_smap(g.AF, allinfo, True)
+        dbg("extracted stream maps")
 
     def _fetch_gdata(self):
         """ Extract gdata values, fetch gdata if necessary. """
@@ -1001,20 +1134,15 @@ class Pafy(object):
         gdata = gdata.encode("utf8")
         tree = ElementTree.fromstring(gdata)
         groups = tree.find(t0 + "group")
-        published = uni(tree.find(t1 + "published").text)
+        self._published = uni(tree.find(t1 + "published").text)
         rating = tree.find(t2 + "rating")  # already exists in basic data
-        likes = int(rating.get("numLikes") if rating is not None else 0)
+        self._likes = int(rating.get("numLikes") if rating is not None else 0)
         dislikes = int(rating.get("numDislikes") if rating is not None else 0)
-        description = uni(groups.find(t0 + "description").text)
-        category = uni(groups.find(t0 + "category").text)
+        self._dislikes = dislikes
+        self._description = uni(groups.find(t0 + "description").text)
+        self._category = uni(groups.find(t0 + "category").text)
         username = tree.find(t1 + "author/" + t1 + "uri").text.split("/")[-1]
-        setattr(self, "_username", username)
-        setattr(self, "_published", published)
-        setattr(self, "_description", description)
-        setattr(self, "_category", category)
-        setattr(self, "_likes", likes)
-        setattr(self, "_dislikes", dislikes)
-
+        self._username = username
         self._have_gdata = 1
 
     def _process_streams(self):
@@ -1023,9 +1151,22 @@ class Pafy(object):
             self.fetch_basic()
 
         streams = [Stream(z, self) for z in self.sm]
+        streams = [x for x in streams if x.itag in g.itags]
         adpt_streams = [Stream(z, self) for z in self.asm]
+        adpt_streams = [x for x in adpt_streams if x.itag in g.itags]
+        dash_streams = [Stream(z, self) for z in self.dash]
+        dash_streams = [x for x in dash_streams if x.itag in g.itags]
         audiostreams = [x for x in adpt_streams if x.bitrate]
         videostreams = [x for x in adpt_streams if not x.bitrate]
+        dash_itags = [x.itag for x in dash_streams]
+        audiostreams = [x for x in audiostreams if x.itag not in dash_itags]
+        videostreams = [x for x in videostreams if x.itag not in dash_itags]
+        audiostreams += [x for x in dash_streams if x.mediatype == "audio"]
+        videostreams += [x for x in dash_streams if x.mediatype != "audio"]
+        audiostreams = sorted(audiostreams, key=lambda x: x.rawbitrate,
+                              reverse=True)
+        videostreams = sorted(videostreams, key=lambda x: x.dimensions,
+                              reverse=True)
         m4astreams = [x for x in audiostreams if x.extension == "m4a"]
         oggstreams = [x for x in audiostreams if x.extension == "ogg"]
         self._streams = streams
@@ -1208,14 +1349,15 @@ class Pafy(object):
         self._fetch_gdata()
         return self._dislikes
 
-    def getbest(self, preftype="any", ftypestrict=True):
+    def _getbest(self, preftype="any", ftypestrict=True, vidonly=False):
         """
-        Return the best resolution available.
+        Return the highest resolution video available.
 
-        set ftypestrict to False to use a non preferred format if that
-        has a higher resolution
+        Select from video-only streams if vidonly is True
         """
-        if not self.streams:
+        streams = self.videostreams if vidonly else self.streams
+
+        if not streams:
             return None
 
         def _sortkey(x, key3d=0, keyres=0, keyftype=0):
@@ -1227,13 +1369,31 @@ class Pafy(object):
             nonstrict = (key3d, keyres, keyftype)
             return strict if ftypestrict else nonstrict
 
-        r = max(self.streams, key=_sortkey)
+        r = max(streams, key=_sortkey)
 
         if ftypestrict and preftype != "any" and r.extension != preftype:
             return None
 
         else:
             return r
+
+    def getbestvideo(self, preftype="any", ftypestrict=True):
+        """
+        Return the best resolution video-only stream.
+
+        set ftypestrict to False to return a non-preferred format if that
+        has a higher resolution
+        """
+        return self._getbest(preftype, ftypestrict, vidonly=True)
+
+    def getbest(self, preftype="any", ftypestrict=True):
+        """
+        Return the highest resolution video+audio stream.
+
+        set ftypestrict to False to return a non-preferred format if that
+        has a higher resolution
+        """
+        return self._getbest(preftype, ftypestrict, vidonly=False)
 
     def getbestaudio(self, preftype="any", ftypestrict=True):
         """ Return the highest bitrate audio Stream object."""
@@ -1268,7 +1428,7 @@ class Pafy(object):
         self.playlist_meta = pl_data
 
 
-def get_playlist(playlist_url, basic=False, gdata=False, signature=False,
+def get_playlist(playlist_url, basic=False, gdata=False, signature=True,
                  size=False, callback=lambda x: None):
     """ Return a dict containing Pafy objects from a YouTube Playlist.
 
@@ -1321,6 +1481,7 @@ def get_playlist(playlist_url, basic=False, gdata=False, signature=False,
             author=v.get('author'),
             user_id=v.get('user_id'),
             privacy=v.get('privacy'),
+            start=v.get('start', 0.0),
             dislikes=v.get('dislikes'),
             duration=v.get('duration'),
             comments=v.get('comments'),
@@ -1332,7 +1493,8 @@ def get_playlist(playlist_url, basic=False, gdata=False, signature=False,
             encrypted_id=v.get('encrypted_id'),
             time_created=v.get('time_created'),
             time_updated=v.get('time_updated'),
-            length_seconds=v.get('length_seconds')
+            length_seconds=v.get('length_seconds'),
+            end=v.get('end', v.get('length_seconds'))
         )
 
         try:

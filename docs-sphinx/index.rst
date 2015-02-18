@@ -2,7 +2,7 @@ Pafy Documentation
 ******************
 .. module:: Pafy
 
-This is the documentation for Pafy - a Python library for retrieving content and metadata from YouTube
+This is the documentation for Pafy - a Python library to download YouTube content and retrieve metadata
 
 A quick start intro with usage examples is available in the `README <http://github.com/np1/pafy/blob/master/README.rst>`_
 
@@ -39,26 +39,23 @@ Create a Pafy object using the :func:`pafy.new` function, giving a YouTube video
     :type basic: bool
     :param gdata: fetch gdata info (upload date, description, category, username, likes, dislikes)
     :type gdata: bool
-    :param signature: fetch data required to decrypt urls, if encrypted
+    :param signature: Note: The signature argument now has no effect and will be removed in a future version
     :type signature: bool
     :param size: fetch the size of each stream (slow)(decrypts urls if needed) 
     :type size: bool
     :param callback: a callback function to receive status strings
     :type callback: function
-    :rtype: Pafy object
+    :rtype: :class:`pafy.Pafy`
 
-If any of **basic**, **gdata**, **signature** or **size** are *False*, those data items will be fetched only when first called for.
+If any of **basic**, **gdata** or **size** are *False*, those data items will be fetched only when first called for.
 
 The defaults are recommended for most cases. If you wish to create many video objects at once, you may want to set all to *False*, eg::
 
-    vid = pafy.new(basic=False, signature=False)
+    vid = pafy.new(basic=False)
 
 This will be quick because no http requests will be made on initialisation.
 
-Setting **signature** or **size** to *True* will override the **basic** argument and force basic data to be fetched too (basic data is required to obtain Stream objects and determine whether signatures are encrypted).
-
-Similarly, setting **size** to *True* will force the signature data to be fetched if the videos have encrypted signatures, so will override the value set in the **signature** argument.
-
+Setting **size** to *True* will override the **basic** argument and force basic data to be fetched too (basic data is required to obtain Stream objects)
 
 Example::
 
@@ -168,9 +165,7 @@ Which will result in this output::
 Pafy Methods
 ------------
 
-The :func:`Pafy.getbest` and :func:`Pafy.getbestaudio` methods are a quick
-way to access the highest quality streams for a particular video without
-needing to query the stream lists. 
+The :func:`Pafy.getbest`, :func:`Pafy.getbestaudio` and :func:`Pafy.getbestvideo` methods are a quick way to access the highest quality streams for a particular video without needing to query the stream lists.
 
 .. function:: Pafy.getbest([preftype="any"][, ftypestrict=True])
 
@@ -195,6 +190,18 @@ needing to query the stream lists.
     :rtype: :class:`pafy.Stream`
 
 
+.. function:: Pafy.getbestvideo([preftype="any"][, ftypestrict=True])
+
+    Selects the video-only stream with the highest resolution.  This will return a
+    "video" stream (ie. one with no audio)
+
+    :param preftype: Preferred type, set to *m4v*, *webm* or *any*
+    :type preftype: str
+    :param ftypestrict: Set to *False* to return a type other than that specified in preftype if it has a higher resolution
+    :type ftypestrict: boolean
+    :rtype: :class:`pafy.Stream`
+
+
 Stream Lists
 ------------
 
@@ -206,7 +213,7 @@ A Pafy object provides multiple stream lists.  These are:
 
 .. attribute:: Pafy.audiostreams
 
-    A list of audio-only streams (aac streams (.m4a) and ogg vorbis streams (.ogg))
+    A list of audio-only streams; aac streams (.m4a) and ogg vorbis streams (.ogg) if available
 
 .. attribute:: Pafy.videostreams
 
@@ -214,7 +221,7 @@ A Pafy object provides multiple stream lists.  These are:
 
 .. attribute:: Pafy.oggstreams
 
-    A list of ogg vorbis encoded audio streams
+    A list of ogg vorbis encoded audio streams (Note: may be empty for some videos)
 
 .. attribute:: Pafy.m4astreams
 
@@ -257,8 +264,12 @@ Stream Attributes
 
     The direct access URL of the stream.  This can be used to stream the media
     in mplayer or vlc, or for downloading with wget or curl.  To download
-    directly, use the :func:`Stream.download` method
+    directly, use the :func:`Stream.download` method.
 
+.. attribute:: Stream.url_https
+
+    The direct access HTTPS URL of the stream.
+    
 .. attribute:: Stream.bitrate
 
     The bitrate of the stream - if it is an audio stream, otherwise None,
@@ -298,7 +309,7 @@ Stream Attributes
 
 .. attribute:: Stream.threed
 
-    Whether the stream is a 3D video (*boolean*)
+    True if the stream is a 3D video (*boolean*)
 
 .. attribute:: Stream.title
 
@@ -327,24 +338,30 @@ An example of accessing Stream attributes::
 Stream Methods
 --------------
 
+
+
+
 .. function:: Stream.get_filesize()     
 
     Returns the filesize of a stream
 
-.. function:: Stream.download([filepath=""][, quiet=False][, callback=None])
+.. function:: Stream.download([filepath=""][, quiet=False][, callback=None][, meta=False][, remux_audio=False])
 
-    Downloads the stream object
+    Downloads the stream object, returns the path of the downloaded file.
 
-    :param filepath: The filepath to use to save the stream, defaults to *title.extension* if ommitted
+    :param filepath: The filepath to use to save the stream, defaults to (sanitised) *title.extension* if ommitted
     :type filepath: string
-    :param quiet: Whether to supress output of the download progress
+    :param quiet: If True, supress output of the download progress
     :type quiet: boolean
     :param callback: Call back function to use for receiving download progress
     :type callback: function or None
+    :param meta: If True, video id and itag are appended to filename
+    :type meta: bool
+    :param remux_audio: If True, remux audio file downloads (fixes some compatibility issues with file format, requires ffmpeg/avconv)
+    :type remux_audio: bool
+    :rtype: str
     
-    If a callback function is provided, it will be called repeatedly for each
-    chunk downloaded.  It must be a function that takes five arguments. These
-    are:
+    If a callback function is provided, it will be called repeatedly for each chunk downloaded.  It must be a function that takes the following five arguments;
 
     - total bytes in stream, *int*
     - total bytes downloaded, *int*
@@ -362,10 +379,9 @@ Example of using stream.download()::
     v = pafy.new("cyMHZVT91Dw")
     s = v.getbest()
     print("Size is %s" % s.get_filesize())
-    s.download()
+    filename = s.download()  # starts download
 
-Will download the file to the current working directory with the filename
-*title.extension* (eg. "cute kittens.mp4") and output the following progress statistics::
+Will download to the current working directory and output the following progress statistics::
 
     Size is 34775366
     1,015,808 Bytes [2.92%] received. Rate: [ 640 kbps].  ETA: [51 secs] 
@@ -381,7 +397,7 @@ Download using *callback* example::
 
     p = pafy.new("cyMHZVT91Dw")
     ba = p.getbestaudio()
-    ba.download(quiet=True, callback=mycb)
+    filename = ba.download(quiet=True, callback=mycb)
 
 The output of this will appear as follows, while the file is downloading::
 
