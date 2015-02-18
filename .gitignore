@@ -10,3 +10,6 @@ dev/
 *.pyc
 .pypi
 __pycache__
+*.swp
+*.mp4
+.s*
